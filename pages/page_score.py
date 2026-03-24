@@ -372,7 +372,8 @@ def render_score_page(IS_CLOUD, num_posts, pinned_global):
 
                 with status_container:
                     if raw["success"]:
-                        st.markdown(f'<span class="scrape-ok">✅ **{name}** ({plat}) — 조회수 {raw["avg_views"]:,}</span>', unsafe_allow_html=True)
+                        views_disp = f'{raw["avg_views"]:,}' if raw["avg_views"] is not None else "N/A"
+                        st.markdown(f'<span class="scrape-ok">✅ **{name}** ({plat}) — 조회수 {views_disp}</span>', unsafe_allow_html=True)
                     else:
                         st.markdown(f'<span class="scrape-fail">❌ **{name}** ({plat}) — {raw["error"]}</span>', unsafe_allow_html=True)
                 time.sleep(0.5)

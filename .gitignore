@@ -4,6 +4,8 @@ __pycache__/
 .env
 *.log
 *.command
+.venv/
+.DS_Store
 start.bat
 start.sh
 사용법.md

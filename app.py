@@ -294,49 +294,42 @@ st.markdown("""
 if "current_page" not in st.session_state:
     st.session_state.current_page = "score"
 
-menu_cols = st.columns(3)
-with menu_cols[0]:
-    if st.button("🏆 KOL 스코어 시스템", use_container_width=True,
-                 type="primary" if st.session_state.current_page == "score" else "secondary"):
-        st.session_state.current_page = "score"
-        st.rerun()
-with menu_cols[1]:
-    if st.button("🔎 콘텐츠 실시간 탐색", use_container_width=True,
-                 type="primary" if st.session_state.current_page == "explore" else "secondary"):
-        st.session_state.current_page = "explore"
-        st.rerun()
-with menu_cols[2]:
-    if st.button("📊 분석 & 관리 도구", use_container_width=True,
-                 type="primary" if st.session_state.current_page == "tools" else "secondary"):
-        st.session_state.current_page = "tools"
-        st.rerun()
+PAGES = [
+    ("score",    "🏆 스코어링"),
+    ("brand",    "🔎 브랜드 탐색"),
+    ("campaign", "📈 캠페인 관리"),
+    ("history",  "📂 KOL DB"),
+]
+
+menu_cols = st.columns(len(PAGES))
+for i, (key, label) in enumerate(PAGES):
+    with menu_cols[i]:
+        if st.button(label, use_container_width=True,
+                     type="primary" if st.session_state.current_page == key else "secondary",
+                     key=f"nav_{key}"):
+            st.session_state.current_page = key
+            st.rerun()
 
 st.markdown("---")
 
 # ══════════════════════════════════════════════════════════════
-#  Menu 1: KOL 스코어 시스템
+#  페이지 라우팅
 # ══════════════════════════════════════════════════════════════
 if st.session_state.current_page == "score":
     from pages.page_score import render_score_page
-    render_score_page(
-        IS_CLOUD=IS_CLOUD,
-        num_posts=num_posts,
-        pinned_global=pinned_global,
-    )
+    render_score_page(IS_CLOUD=IS_CLOUD, num_posts=num_posts, pinned_global=pinned_global)
 
-# ══════════════════════════════════════════════════════════════
-#  Menu 2: 콘텐츠 실시간 탐색
-# ══════════════════════════════════════════════════════════════
-elif st.session_state.current_page == "explore":
-    from pages.page_explore import render_explore_page
-    render_explore_page(IS_CLOUD=IS_CLOUD)
+elif st.session_state.current_page == "brand":
+    from pages.page_brand import render_brand_page
+    render_brand_page(IS_CLOUD=IS_CLOUD)
 
-# ══════════════════════════════════════════════════════════════
-#  Menu 3: 분석 & 관리 도구
-# ══════════════════════════════════════════════════════════════
-elif st.session_state.current_page == "tools":
-    from pages.page_tools import render_tools_page
-    render_tools_page(IS_CLOUD=IS_CLOUD, num_posts=num_posts)
+elif st.session_state.current_page == "campaign":
+    from pages.page_campaign import render_campaign_page
+    render_campaign_page(IS_CLOUD=IS_CLOUD, num_posts=num_posts)
+
+elif st.session_state.current_page == "history":
+    from pages.page_history import render_history_page
+    render_history_page()
 
 # ──────────────────────────────────────────────────────────────
 #  푸터

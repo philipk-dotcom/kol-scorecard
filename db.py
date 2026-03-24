@@ -402,13 +402,16 @@ def delete_campaign(campaign_id: int):
 def get_daily_impressions(campaign_id: int = None) -> list[dict]:
     """유가 포스팅의 포스팅일 기준 일별 노출수 합산"""
     conn = _get_conn()
-    where = "WHERE campaign_id = ?" if campaign_id else ""
-    params = (campaign_id,) if campaign_id else ()
+    if campaign_id:
+        where = "WHERE campaign_id = ? AND post_date IS NOT NULL AND post_date != ''"
+        params = (campaign_id,)
+    else:
+        where = "WHERE post_date IS NOT NULL AND post_date != ''"
+        params = ()
     rows = conn.execute(f"""
         SELECT post_date, SUM(views) as daily_views, COUNT(*) as post_count
         FROM paid_posts
         {where}
-        AND post_date IS NOT NULL AND post_date != ''
         GROUP BY post_date
         ORDER BY post_date
     """, params).fetchall()

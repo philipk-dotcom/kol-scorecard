@@ -1,5 +1,5 @@
 """
-Menu 2: 콘텐츠 실시간 탐색 (F1 + F2)
+브랜드 콘텐츠 탐색 페이지 (F1 + F2)
 """
 
 import streamlit as st
@@ -88,7 +88,7 @@ def _localize_brand(brand: str, country_key: str) -> list[str]:
     return [brand.strip()]
 
 
-def render_explore_page(IS_CLOUD):
+def render_brand_page(IS_CLOUD):
     st.markdown("### 🔎 콘텐츠 실시간 탐색")
     st.caption("브랜드명을 입력하면 해당 국가의 플랫폼에서 관련 콘텐츠를 수집·분석합니다.")
 
