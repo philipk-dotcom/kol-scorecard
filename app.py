@@ -189,24 +189,29 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 🔑 플랫폼별 로그인")
 
+    # TikTok/Instagram: 로컬 Playwright 전용
+    # YouTube/Twitter: 클라우드에서도 링크 제공
+    REQUIRES_LOCAL = {"TikTok", "Instagram"}
+
     if IS_CLOUD:
         st.markdown(
             '<div class="sidebar-info">'
-            '☁️ 클라우드 버전에서는 Playwright 자동 수집이 제한됩니다.<br>'
-            '수집 실패 시 직접 수치를 입력해 점수를 계산하세요.'
+            '🎵 TikTok · 📸 Instagram은 <b>로컬 전용</b>입니다.<br>'
+            '<code>streamlit run app.py</code>로 로컬 실행 후<br>'
+            'Playwright 브라우저에서 로그인하세요.<br><br>'
+            '▶️ YouTube · 🐦 Twitter는 아래 버튼으로 로그인 가능합니다.'
             '</div>',
             unsafe_allow_html=True
         )
     else:
         st.markdown(
             '<div class="sidebar-info">'
-            '로컬에서는 버튼 클릭 시 Playwright 브라우저가 열립니다.<br>'
-            '로그인 후 브라우저를 닫으면 세션이 저장됩니다.'
+            '버튼 클릭 → Playwright 브라우저 열림 → 로그인 → 창 닫기.<br>'
+            '한 번 로그인하면 세션이 유지됩니다.'
             '</div>',
             unsafe_allow_html=True
         )
 
-    # 플랫폼별 로그인 버튼 (클라우드·로컬 모두 표시)
     for plat, info in PLATFORM_LOGIN_INFO.items():
         login_key = f"login_{plat.lower()}"
         if login_key not in st.session_state:
@@ -214,17 +219,28 @@ with st.sidebar:
 
         col_btn, col_status = st.columns([3, 2])
         with col_btn:
-            if IS_CLOUD:
+            if IS_CLOUD and plat in REQUIRES_LOCAL:
+                # TikTok/Instagram: 클라우드에서는 비활성 표시
+                st.button(
+                    f"{info['icon']} {plat} (로컬 전용)",
+                    disabled=True, use_container_width=True,
+                    key=f"btn_disabled_{login_key}",
+                )
+            elif IS_CLOUD:
+                # YouTube/Twitter: 클라우드에서 링크 버튼
                 st.link_button(
                     f"{info['icon']} {plat}",
                     url=info["url"],
                     use_container_width=True,
                 )
             else:
+                # 로컬: Playwright 로그인
                 if st.button(f"{info['icon']} {plat}", key=f"btn_{login_key}", use_container_width=True):
                     st.session_state[f"open_browser_{plat.lower()}"] = True
         with col_status:
-            if st.session_state[login_key]:
+            if IS_CLOUD and plat in REQUIRES_LOCAL:
+                st.markdown("🖥️ 로컬")
+            elif st.session_state[login_key]:
                 st.markdown("✅ 완료")
             else:
                 st.markdown("🔒")
