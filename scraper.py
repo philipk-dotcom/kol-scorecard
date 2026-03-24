@@ -241,104 +241,126 @@ def scrape_tiktok(username: str, num_posts: int = 12,
             result["error"] = ""  # 에러 초기화 후 아래 requests 방식 시도
             # (fall through)
 
-    # ── requests 방식 (쿠키 있으면 사용) ──
+    # ── yt-dlp 방식 (로그인 불필요, 가장 안정적) ──
     try:
-        MOBILE_UA = (
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
-            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 "
-            "Mobile/15E148 Safari/604.1"
-        )
+        import subprocess, sys
+        profile_url = f"https://www.tiktok.com/@{username}"
+        cmd = [
+            sys.executable, "-m", "yt_dlp",
+            "--flat-playlist", "--dump-json",
+            f"--playlist-items", f"1:{num_posts + 5}",
+            "--no-warnings",
+            profile_url
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+        lines = [l for l in proc.stdout.strip().split("\n") if l.strip()]
+
+        if lines:
+            posts = []
+            for line in lines:
+                try:
+                    info = json.loads(line)
+                    vid_id = str(info.get("id", ""))
+                    if vid_id in pinned_ids:
+                        continue
+                    posts.append({
+                        "id":       vid_id,
+                        "views":    info.get("view_count"),
+                        "likes":    info.get("like_count"),
+                        "comments": info.get("comment_count"),
+                        "saves":    info.get("repost_count"),  # yt-dlp에서 가능한 경우
+                        "shares":   None,
+                    })
+                    if len(posts) >= num_posts:
+                        break
+                except Exception:
+                    continue
+
+            if posts:
+                result["success"] = True
+                result["posts"] = posts
+                result["post_count"] = len(posts)
+                result["avg_views"]    = _avg([p["views"]    for p in posts])
+                result["avg_likes"]    = _avg([p["likes"]    for p in posts])
+                result["avg_comments"] = _avg([p["comments"] for p in posts])
+                result["avg_saves"]    = _avg([p["saves"]    for p in posts])
+                result["avg_shares"]   = _avg([p["shares"]   for p in posts])
+                return result
+
+    except Exception:
+        pass
+
+    # ── requests HTML 파싱 fallback ──
+    try:
         sess = requests.Session()
         sess.headers.update({
             **HEADERS_CHROME,
-            "User-Agent": MOBILE_UA,
             "Referer": "https://www.tiktok.com/",
         })
-        # 세션 쿠키 적용 (클라우드 로그인용)
         session_cookies = _get_session_cookies()
         if session_cookies.get("tiktok"):
             sess.cookies.set("sessionid", session_cookies["tiktok"], domain=".tiktok.com")
+
         resp = sess.get(f"https://www.tiktok.com/@{username}", timeout=20)
 
         items = []
-
-        # ① UNIVERSAL_DATA_FOR_REHYDRATION (최신 TikTok 포맷)
+        # UNIVERSAL_DATA_FOR_REHYDRATION
         m = re.search(
             r'id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]*?)</script>',
             resp.text
         )
-        if m and not items:
+        if m:
             try:
                 d = json.loads(m.group(1))
-                items = (d.get("__DEFAULT_SCOPE__", {})
-                          .get("webapp.video-list", {})
-                          .get("itemList", []))
+                scope = d.get("__DEFAULT_SCOPE__", {})
+                for k in ["webapp.video-list", "webapp.user-detail"]:
+                    items = scope.get(k, {}).get("itemList", [])
+                    if items:
+                        break
+                if not items:
+                    ui = scope.get("webapp.user-detail", {}).get("userInfo", {})
+                    items = ui.get("itemList", [])
             except Exception:
                 pass
 
-        # ② SIGI_STATE
-        if not items:
-            m = re.search(r'id="SIGI_STATE"[^>]*>([\s\S]*?)</script>', resp.text)
-            if m:
-                try:
-                    d = json.loads(m.group(1))
-                    module = d.get("ItemModule", {})
-                    items = list(module.values()) if module else []
-                except Exception:
-                    pass
+        if items:
+            def _extract_stats(item):
+                s = item.get("stats") or item.get("statsV2") or {}
+                return {
+                    "views":    s.get("playCount") or s.get("vvCount"),
+                    "likes":    s.get("diggCount"),
+                    "comments": s.get("commentCount"),
+                    "saves":    s.get("collectCount"),
+                    "shares":   s.get("shareCount"),
+                }
+            posts = []
+            for item in items:
+                vid_id = str(item.get("id", ""))
+                if vid_id in pinned_ids:
+                    continue
+                st_data = _extract_stats(item)
+                posts.append({"id": vid_id, **st_data})
+                if len(posts) >= num_posts:
+                    break
+            if posts:
+                result["success"] = True
+                result["posts"] = posts
+                result["post_count"] = len(posts)
+                result["avg_views"]    = _avg([p["views"]    for p in posts])
+                result["avg_likes"]    = _avg([p["likes"]    for p in posts])
+                result["avg_comments"] = _avg([p["comments"] for p in posts])
+                result["avg_saves"]    = _avg([p["saves"]    for p in posts])
+                result["avg_shares"]   = _avg([p["shares"]   for p in posts])
+                return result
+    except Exception:
+        pass
 
-        # ③ __NEXT_DATA__ (구버전 포맷)
-        if not items:
-            m = re.search(r'id="__NEXT_DATA__"[^>]*>([\s\S]*?)</script>', resp.text)
-            if m:
-                try:
-                    d = json.loads(m.group(1))
-                    pp = d.get("props", {}).get("pageProps", {})
-                    items = pp.get("itemList") or pp.get("videoFeed") or []
-                except Exception:
-                    pass
-
-        if not items:
-            result["error"] = "데이터 추출 실패 — 수동으로 지표를 입력해주세요."
-            return result
-
-        def _extract_stats(item):
-            s = item.get("stats") or item.get("statsV2") or {}
-            return {
-                "views":    s.get("playCount") or s.get("vvCount"),
-                "likes":    s.get("diggCount"),
-                "comments": s.get("commentCount"),
-                "saves":    s.get("collectCount"),
-                "shares":   s.get("shareCount"),
-            }
-
-        posts = []
-        for item in items:
-            vid_id = str(item.get("id", ""))
-            if vid_id in pinned_ids:
-                continue
-            st = _extract_stats(item)
-            posts.append({"id": vid_id, **st})
-            if len(posts) >= num_posts:
-                break
-
-        if not posts:
-            result["error"] = "게시물 없음 — 비공개 계정이거나 수동 입력이 필요합니다."
-            return result
-
-        result["success"] = True
-        result["posts"] = posts
-        result["post_count"] = len(posts)
-        result["avg_views"]    = _avg([p["views"]    for p in posts])
-        result["avg_likes"]    = _avg([p["likes"]    for p in posts])
-        result["avg_comments"] = _avg([p["comments"] for p in posts])
-        result["avg_saves"]    = _avg([p["saves"]    for p in posts])
-        result["avg_shares"]   = _avg([p["shares"]   for p in posts])
-        return result
-
-    except Exception as e:
-        result["error"] = f"requests 오류: {e}"
-        return result
+    result["error"] = (
+        "TikTok 데이터 추출 실패.\n"
+        "① yt-dlp가 설치되어 있는지 확인 (pip install yt-dlp)\n"
+        "② 또는 STEP 3 표에서 수동 입력"
+    )
+    return result
 
 
 # ──────────────────────────────────────────────────────────────
