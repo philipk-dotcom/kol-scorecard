@@ -186,6 +186,19 @@ def render_explore_page(IS_CLOUD):
         progress.progress(1.0, text="✅ 탐색 완료!")
         st.session_state.explore_results = all_posts
 
+        # 에러 표시
+        errors = getattr(search_brand, '_last_errors', [])
+        if errors and not all_posts:
+            st.error("검색 결과가 없습니다. 다음 오류가 발생했습니다:")
+            for err in errors:
+                st.warning(err)
+        elif errors:
+            with st.expander(f"⚠️ 일부 플랫폼 오류 ({len(errors)}건)"):
+                for err in errors:
+                    st.caption(err)
+
+        st.success(f"총 {len(all_posts)}건 수집됨")
+
     # ══════════════════════════════════════════════════════════
     #  결과 표시
     # ══════════════════════════════════════════════════════════

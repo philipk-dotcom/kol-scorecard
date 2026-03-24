@@ -865,101 +865,170 @@ SEARCH_RESULT = {
 def search_tiktok_brand(brand: str, max_results: int = 30,
                         playwright_page=None) -> dict:
     """TikTok에서 브랜드명 검색 → 콘텐츠 목록 반환"""
+    from urllib.parse import quote
     result = {**SEARCH_RESULT, "platform": "TikTok", "brand": brand}
 
+    # ── 방법 1: Playwright (로그인 세션 사용) ──
     if playwright_page:
         try:
             page = playwright_page
-            search_url = f"https://www.tiktok.com/search/video?q={brand}"
-            page.goto(search_url, timeout=20000)
-            page.wait_for_selector('[data-e2e="search_video-item"]', timeout=15000)
+            search_url = f"https://www.tiktok.com/search/video?q={quote(brand)}"
+            page.goto(search_url, timeout=25000)
+            page.wait_for_selector(
+                '[data-e2e="search_video-item"], [data-e2e="search-card-desc"], article',
+                timeout=15000
+            )
 
-            # 스크롤로 더 로드
-            for _ in range(3):
+            for _ in range(4):
                 page.keyboard.press("End")
                 time.sleep(1.5)
 
+            # 여러 셀렉터 시도 (TikTok UI가 자주 변경됨)
             items = page.query_selector_all('[data-e2e="search_video-item"]')
+            if not items:
+                items = page.query_selector_all('[data-e2e="search-common-link"]')
+            if not items:
+                items = page.query_selector_all('div[class*="DivItemCard"]')
+
             posts = []
             for item in items[:max_results]:
                 try:
                     link_el = item.query_selector("a")
                     href = link_el.get_attribute("href") if link_el else ""
-                    desc_el = item.query_selector('[data-e2e="search-card-desc"]')
+                    if not href:
+                        href = item.get_attribute("href") or ""
+
+                    desc_el = (item.query_selector('[data-e2e="search-card-desc"]')
+                               or item.query_selector('span[class*="SpanText"]'))
                     desc = desc_el.inner_text() if desc_el else ""
-                    view_el = item.query_selector("strong")
+
+                    # 조회수 - 여러 셀렉터
+                    view_el = (item.query_selector('[data-e2e="video-views"]')
+                               or item.query_selector('strong[data-e2e="video-views"]')
+                               or item.query_selector('strong'))
                     views = _parse_num(view_el.inner_text() if view_el else None)
 
-                    # 작성자 추출
-                    author_el = item.query_selector('[data-e2e="search-card-user-unique-id"]')
+                    author_el = (item.query_selector('[data-e2e="search-card-user-unique-id"]')
+                                 or item.query_selector('p[data-e2e="search-card-user-unique-id"]'))
                     author = author_el.inner_text().strip() if author_el else ""
 
-                    posts.append({
-                        "url": href, "kol_name": author, "platform": "TikTok",
-                        "description": desc, "views": views,
-                        "likes": None, "comments": None, "saves": None,
-                        "hashtags": re.findall(r"#[\w\u3000-\u9fff]+", desc),
-                    })
+                    # username을 URL에서 추출 시도
+                    if not author and href:
+                        m = re.search(r"@([\w.]+)", href)
+                        if m:
+                            author = m.group(1)
+
+                    if href:
+                        posts.append({
+                            "url": href, "kol_name": author, "platform": "TikTok",
+                            "description": desc, "views": views,
+                            "likes": None, "comments": None, "saves": None,
+                            "hashtags": re.findall(r"#[\w\u3000-\u9fff]+", desc),
+                        })
                 except Exception:
                     continue
 
             if posts:
                 result["success"] = True
                 result["posts"] = posts
-            else:
-                result["error"] = "검색 결과 없음. 로그인 후 재시도하세요."
-            return result
+                return result
 
         except Exception as e:
-            result["error"] = f"TikTok 검색 오류: {e}"
-            return result
+            pass  # fallback to requests
 
-    # requests fallback
+    # ── 방법 2: requests (모바일 웹 HTML 파싱) ──
     try:
+        from urllib.parse import quote as _q
+        MOBILE_UA = (
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
+            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 "
+            "Mobile/15E148 Safari/604.1"
+        )
         sess = requests.Session()
         sess.headers.update({
             **HEADERS_CHROME,
-            "User-Agent": (
-                "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
-                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 "
-                "Mobile/15E148 Safari/604.1"
-            ),
+            "User-Agent": MOBILE_UA,
+            "Referer": "https://www.tiktok.com/",
         })
+
+        # 검색 페이지 HTML에서 UNIVERSAL_DATA 추출
         resp = sess.get(
-            f"https://www.tiktok.com/api/search/general/full/"
-            f"?keyword={brand}&search_id=&cursor=0&count={max_results}",
+            f"https://www.tiktok.com/search/video?q={_q(brand)}",
             timeout=20
         )
-        if resp.ok:
-            data = resp.json().get("data", [])
-            posts = []
-            for item in data:
-                if item.get("type") != 1:
-                    continue
-                info = item.get("item", {})
-                stats = info.get("stats", {})
-                desc = info.get("desc", "")
-                author = info.get("author", {}).get("uniqueId", "")
-                vid_id = info.get("id", "")
-                posts.append({
-                    "url": f"https://www.tiktok.com/@{author}/video/{vid_id}",
-                    "kol_name": author, "platform": "TikTok",
-                    "description": desc,
-                    "views": stats.get("playCount"),
-                    "likes": stats.get("diggCount"),
-                    "comments": stats.get("commentCount"),
-                    "saves": stats.get("collectCount"),
-                    "hashtags": re.findall(r"#[\w\u3000-\u9fff]+", desc),
-                })
-            if posts:
-                result["success"] = True
-                result["posts"] = posts
-                return result
 
-        result["error"] = "TikTok 검색 API 접근 실패. 브라우저 로그인 후 재시도하세요."
+        posts = []
+
+        # JSON 데이터 추출 시도
+        m = re.search(
+            r'id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]*?)</script>',
+            resp.text
+        )
+        if m:
+            try:
+                d = json.loads(m.group(1))
+                items = (d.get("__DEFAULT_SCOPE__", {})
+                          .get("webapp.search-list", {})
+                          .get("itemList", []))
+                if not items:
+                    # 다른 경로 시도
+                    for key in d.get("__DEFAULT_SCOPE__", {}):
+                        if "search" in key.lower():
+                            items = d["__DEFAULT_SCOPE__"][key].get("itemList", [])
+                            if items:
+                                break
+
+                for item in items[:max_results]:
+                    stats = item.get("stats") or item.get("statsV2") or {}
+                    desc = item.get("desc", "")
+                    author = item.get("author", {}).get("uniqueId", "")
+                    vid_id = item.get("id", "")
+                    posts.append({
+                        "url": f"https://www.tiktok.com/@{author}/video/{vid_id}",
+                        "kol_name": author, "platform": "TikTok",
+                        "description": desc,
+                        "views": stats.get("playCount") or stats.get("vvCount"),
+                        "likes": stats.get("diggCount"),
+                        "comments": stats.get("commentCount"),
+                        "saves": stats.get("collectCount"),
+                        "hashtags": re.findall(r"#[\w\u3000-\u9fff]+", desc),
+                    })
+            except Exception:
+                pass
+
+        # SIGI_STATE fallback
+        if not posts:
+            m2 = re.search(r'id="SIGI_STATE"[^>]*>([\s\S]*?)</script>', resp.text)
+            if m2:
+                try:
+                    d2 = json.loads(m2.group(1))
+                    module = d2.get("ItemModule", {})
+                    for vid_id, item in list(module.items())[:max_results]:
+                        stats = item.get("stats", {})
+                        desc = item.get("desc", "")
+                        author = item.get("author", "")
+                        posts.append({
+                            "url": f"https://www.tiktok.com/@{author}/video/{vid_id}",
+                            "kol_name": author, "platform": "TikTok",
+                            "description": desc,
+                            "views": _safe_int(stats.get("playCount")),
+                            "likes": _safe_int(stats.get("diggCount")),
+                            "comments": _safe_int(stats.get("commentCount")),
+                            "saves": _safe_int(stats.get("collectCount")),
+                            "hashtags": re.findall(r"#[\w\u3000-\u9fff]+", desc),
+                        })
+                except Exception:
+                    pass
+
+        if posts:
+            result["success"] = True
+            result["posts"] = posts
+        else:
+            result["error"] = "TikTok 검색 결과 없음. 로그인이 필요할 수 있습니다."
         return result
+
     except Exception as e:
-        result["error"] = f"오류: {e}"
+        result["error"] = f"TikTok 검색 오류: {e}"
         return result
 
 
@@ -1032,35 +1101,61 @@ def search_instagram_brand(brand: str, max_results: int = 30,
 
 
 def search_youtube_brand(brand: str, max_results: int = 30) -> dict:
-    """YouTube에서 브랜드 검색 (yt-dlp)"""
+    """YouTube에서 브랜드 검색 (yt-dlp) — 상세 메트릭 포함"""
     result = {**SEARCH_RESULT, "platform": "YouTube", "brand": brand}
 
     try:
         import subprocess, sys
-        cmd = [
+
+        # yt-dlp로 검색 + 상세 정보 (--flat-playlist 없이)
+        # 먼저 flat으로 ID 목록 가져오기
+        cmd_flat = [
             sys.executable, "-m", "yt_dlp",
             "--flat-playlist", "--dump-json",
             f"--playlist-items", f"1:{max_results}",
             "--no-warnings",
             f"ytsearch{max_results}:{brand}"
         ]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        proc = subprocess.run(cmd_flat, capture_output=True, text=True, timeout=60)
         lines = [l for l in proc.stdout.strip().split("\n") if l.strip()]
 
         posts = []
-        for line in lines:
+        for line in lines[:max_results]:
             try:
                 info = json.loads(line)
                 vid_id = info.get("id", "")
                 title = info.get("title", "")
                 channel = info.get("channel", "") or info.get("uploader", "")
+
+                views = info.get("view_count")
+                likes = info.get("like_count")
+                comments = info.get("comment_count")
+
+                # flat-playlist는 상세가 부족하면 개별 조회
+                if views is None or likes is None:
+                    try:
+                        detail_cmd = [
+                            sys.executable, "-m", "yt_dlp",
+                            "--dump-json", "--no-warnings", "--skip-download",
+                            f"https://www.youtube.com/watch?v={vid_id}"
+                        ]
+                        dp = subprocess.run(detail_cmd, capture_output=True, text=True, timeout=20)
+                        if dp.returncode == 0 and dp.stdout.strip():
+                            detail = json.loads(dp.stdout.strip())
+                            views = detail.get("view_count") or views
+                            likes = detail.get("like_count") or likes
+                            comments = detail.get("comment_count") or comments
+                            channel = detail.get("channel") or detail.get("uploader") or channel
+                    except Exception:
+                        pass
+
                 posts.append({
                     "url": f"https://www.youtube.com/watch?v={vid_id}",
                     "kol_name": channel, "platform": "YouTube",
                     "description": title,
-                    "views": info.get("view_count"),
-                    "likes": info.get("like_count"),
-                    "comments": None,
+                    "views": views,
+                    "likes": likes,
+                    "comments": comments,
                     "saves": None,
                     "hashtags": re.findall(r"#[\w\u3000-\u9fff]+", title),
                 })
@@ -1084,19 +1179,29 @@ def search_brand(brand: str, platforms: list[str],
                  playwright_page=None) -> list[dict]:
     """여러 플랫폼에서 브랜드 검색 → 통합 결과 반환"""
     all_posts = []
+    errors = []
     for plat in platforms:
-        if plat == "TikTok":
-            r = search_tiktok_brand(brand, max_results, playwright_page)
-        elif plat == "Instagram":
-            r = search_instagram_brand(brand, max_results, playwright_page)
-        elif plat == "YouTube":
-            r = search_youtube_brand(brand, max_results)
-        else:
-            continue
-        if r["success"]:
-            for p in r["posts"]:
-                p["brand"] = brand
-            all_posts.extend(r["posts"])
+        try:
+            if plat == "TikTok":
+                r = search_tiktok_brand(brand, max_results, playwright_page)
+            elif plat == "Instagram":
+                r = search_instagram_brand(brand, max_results, playwright_page)
+            elif plat == "YouTube":
+                r = search_youtube_brand(brand, max_results)
+            else:
+                continue
+            if r["success"]:
+                for p in r["posts"]:
+                    p["brand"] = brand
+                all_posts.extend(r["posts"])
+            elif r.get("error"):
+                errors.append(f"{plat}: {r['error']}")
+        except Exception as e:
+            errors.append(f"{plat}: 예외 - {e}")
+    # 에러 정보를 리스트 속성으로 첨부
+    all_posts_obj = all_posts
+    # 별도 함수로 에러 접근 가능하도록 전역에 저장
+    search_brand._last_errors = errors
     return all_posts
 
 

@@ -215,25 +215,19 @@ with st.sidebar:
         col_btn, col_status = st.columns([3, 2])
         with col_btn:
             if IS_CLOUD:
-                # 클라우드: 새 탭에서 로그인 URL 열기
-                st.markdown(
-                    f'<a href="{info["url"]}" target="_blank" '
-                    f'style="display:block;text-align:center;background:#2e75b6;color:white;'
-                    f'padding:6px 12px;border-radius:8px;text-decoration:none;font-size:0.85rem;'
-                    f'font-weight:600;transition:all 0.2s;"'
-                    f'onmouseover="this.style.background=\'#1a5a9c\'"'
-                    f'onmouseout="this.style.background=\'#2e75b6\'">'
-                    f'{info["icon"]} {plat} 로그인</a>',
-                    unsafe_allow_html=True
+                st.link_button(
+                    f"{info['icon']} {plat}",
+                    url=info["url"],
+                    use_container_width=True,
                 )
             else:
-                if st.button(f"{info['icon']} {plat} 로그인", key=f"btn_{login_key}", use_container_width=True):
+                if st.button(f"{info['icon']} {plat}", key=f"btn_{login_key}", use_container_width=True):
                     st.session_state[f"open_browser_{plat.lower()}"] = True
         with col_status:
             if st.session_state[login_key]:
                 st.markdown("✅ 완료")
             else:
-                st.markdown("🔒 필요")
+                st.markdown("🔒")
 
     st.markdown("---")
     st.markdown("### 📌 핀 게시물 ID")
