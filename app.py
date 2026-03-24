@@ -192,7 +192,7 @@ with st.sidebar:
     if IS_CLOUD:
         st.markdown(
             '<div class="sidebar-info">'
-            '☁️ 클라우드 버전에서는 자동 수집이 제한됩니다.<br>'
+            '☁️ 클라우드 버전에서는 Playwright 자동 수집이 제한됩니다.<br>'
             '수집 실패 시 직접 수치를 입력해 점수를 계산하세요.'
             '</div>',
             unsafe_allow_html=True
@@ -200,24 +200,40 @@ with st.sidebar:
     else:
         st.markdown(
             '<div class="sidebar-info">'
-            '플랫폼별로 로그인하세요. 한 번 로그인하면 세션이 유지됩니다.'
+            '로컬에서는 버튼 클릭 시 Playwright 브라우저가 열립니다.<br>'
+            '로그인 후 브라우저를 닫으면 세션이 저장됩니다.'
             '</div>',
             unsafe_allow_html=True
         )
-        for plat, info in PLATFORM_LOGIN_INFO.items():
-            login_key = f"login_{plat.lower()}"
-            if login_key not in st.session_state:
-                st.session_state[login_key] = False
 
-            col_btn, col_status = st.columns([3, 2])
-            with col_btn:
-                if st.button(f"{info['icon']} {plat}", key=f"btn_{login_key}", use_container_width=True):
+    # 플랫폼별 로그인 버튼 (클라우드·로컬 모두 표시)
+    for plat, info in PLATFORM_LOGIN_INFO.items():
+        login_key = f"login_{plat.lower()}"
+        if login_key not in st.session_state:
+            st.session_state[login_key] = False
+
+        col_btn, col_status = st.columns([3, 2])
+        with col_btn:
+            if IS_CLOUD:
+                # 클라우드: 새 탭에서 로그인 URL 열기
+                st.markdown(
+                    f'<a href="{info["url"]}" target="_blank" '
+                    f'style="display:block;text-align:center;background:#2e75b6;color:white;'
+                    f'padding:6px 12px;border-radius:8px;text-decoration:none;font-size:0.85rem;'
+                    f'font-weight:600;transition:all 0.2s;"'
+                    f'onmouseover="this.style.background=\'#1a5a9c\'"'
+                    f'onmouseout="this.style.background=\'#2e75b6\'">'
+                    f'{info["icon"]} {plat} 로그인</a>',
+                    unsafe_allow_html=True
+                )
+            else:
+                if st.button(f"{info['icon']} {plat} 로그인", key=f"btn_{login_key}", use_container_width=True):
                     st.session_state[f"open_browser_{plat.lower()}"] = True
-            with col_status:
-                if st.session_state[login_key]:
-                    st.markdown("✅ 완료")
-                else:
-                    st.markdown("🔒 필요")
+        with col_status:
+            if st.session_state[login_key]:
+                st.markdown("✅ 완료")
+            else:
+                st.markdown("🔒 필요")
 
     st.markdown("---")
     st.markdown("### 📌 핀 게시물 ID")
