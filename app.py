@@ -189,17 +189,13 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 🔑 플랫폼별 로그인")
 
-    # TikTok/Instagram: 로컬 Playwright 전용
-    # YouTube/Twitter: 클라우드에서도 링크 제공
-    REQUIRES_LOCAL = {"TikTok", "Instagram"}
-
     if IS_CLOUD:
         st.markdown(
             '<div class="sidebar-info">'
-            '🎵 TikTok · 📸 Instagram은 <b>로컬 전용</b>입니다.<br>'
-            '<code>streamlit run app.py</code>로 로컬 실행 후<br>'
-            'Playwright 브라우저에서 로그인하세요.<br><br>'
-            '▶️ YouTube · 🐦 Twitter는 아래 버튼으로 로그인 가능합니다.'
+            '☁️ <b>클라우드 로그인 방법</b><br>'
+            '① 아래 버튼으로 플랫폼에 로그인<br>'
+            '② 브라우저 개발자도구(F12) → Application → Cookies<br>'
+            '③ <code>sessionid</code> 값을 복사해서 아래에 붙여넣기'
             '</div>',
             unsafe_allow_html=True
         )
@@ -219,31 +215,40 @@ with st.sidebar:
 
         col_btn, col_status = st.columns([3, 2])
         with col_btn:
-            if IS_CLOUD and plat in REQUIRES_LOCAL:
-                # TikTok/Instagram: 클라우드에서는 비활성 표시
-                st.button(
-                    f"{info['icon']} {plat} (로컬 전용)",
-                    disabled=True, use_container_width=True,
-                    key=f"btn_disabled_{login_key}",
-                )
-            elif IS_CLOUD:
-                # YouTube/Twitter: 클라우드에서 링크 버튼
+            if IS_CLOUD:
                 st.link_button(
-                    f"{info['icon']} {plat}",
+                    f"{info['icon']} {plat} 로그인",
                     url=info["url"],
                     use_container_width=True,
                 )
             else:
-                # 로컬: Playwright 로그인
                 if st.button(f"{info['icon']} {plat}", key=f"btn_{login_key}", use_container_width=True):
                     st.session_state[f"open_browser_{plat.lower()}"] = True
         with col_status:
-            if IS_CLOUD and plat in REQUIRES_LOCAL:
-                st.markdown("🖥️ 로컬")
-            elif st.session_state[login_key]:
+            if st.session_state[login_key]:
                 st.markdown("✅ 완료")
             else:
                 st.markdown("🔒")
+
+    # 클라우드: 세션 쿠키 입력
+    if IS_CLOUD:
+        st.markdown("---")
+        st.markdown("### 🍪 세션 쿠키 입력")
+        st.caption("로그인 후 브라우저에서 복사한 sessionid를 입력하세요.")
+        tiktok_cookie = st.text_input(
+            "TikTok sessionid", type="password", key="tiktok_cookie",
+            placeholder="복사한 sessionid 값 붙여넣기"
+        )
+        instagram_cookie = st.text_input(
+            "Instagram sessionid", type="password", key="instagram_cookie",
+            placeholder="복사한 sessionid 값 붙여넣기"
+        )
+        if tiktok_cookie:
+            st.session_state["tiktok_session_cookie"] = tiktok_cookie
+            st.session_state["login_tiktok"] = True
+        if instagram_cookie:
+            st.session_state["instagram_session_cookie"] = instagram_cookie
+            st.session_state["login_instagram"] = True
 
     st.markdown("---")
     st.markdown("### 📌 핀 게시물 ID")

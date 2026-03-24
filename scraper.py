@@ -241,9 +241,8 @@ def scrape_tiktok(username: str, num_posts: int = 12,
             result["error"] = ""  # 에러 초기화 후 아래 requests 방식 시도
             # (fall through)
 
-    # ── requests 방식 (로그인 없이) ──
+    # ── requests 방식 (쿠키 있으면 사용) ──
     try:
-        # 모바일 UA가 TikTok 봇 감지를 덜 받음
         MOBILE_UA = (
             "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
             "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 "
@@ -255,6 +254,10 @@ def scrape_tiktok(username: str, num_posts: int = 12,
             "User-Agent": MOBILE_UA,
             "Referer": "https://www.tiktok.com/",
         })
+        # 세션 쿠키 적용 (클라우드 로그인용)
+        session_cookies = _get_session_cookies()
+        if session_cookies.get("tiktok"):
+            sess.cookies.set("sessionid", session_cookies["tiktok"], domain=".tiktok.com")
         resp = sess.get(f"https://www.tiktok.com/@{username}", timeout=20)
 
         items = []
@@ -406,10 +409,14 @@ def scrape_instagram(username: str, num_posts: int = 12,
             result["error"] = ""
             # (fall through)
 
-    # requests fallback
+    # requests fallback (쿠키 있으면 사용)
     try:
         sess = requests.Session()
         sess.headers.update(HEADERS_CHROME)
+        # 세션 쿠키 적용 (클라우드 로그인용)
+        session_cookies = _get_session_cookies()
+        if session_cookies.get("instagram"):
+            sess.cookies.set("sessionid", session_cookies["instagram"], domain=".instagram.com")
         # Instagram public JSON endpoint
         resp = sess.get(
             f"https://www.instagram.com/api/v1/users/web_profile_info/?username={username}",
@@ -417,13 +424,17 @@ def scrape_instagram(username: str, num_posts: int = 12,
             timeout=15
         )
         if resp.status_code != 200:
-            result["error"] = (
-                "📋 Instagram은 로그인 없이 지표 수집이 불가합니다.\n"
-                "아래 방법으로 직접 입력해주세요:\n"
-                "① Instagram 앱/웹에서 프로필 → 게시물 12개 열기\n"
-                "② 각 게시물의 좋아요·댓글 수 확인\n"
-                "③ STEP 3 표에서 직접 입력 후 점수 계산"
-            )
+            if session_cookies.get("instagram"):
+                result["error"] = (
+                    "📋 Instagram 세션이 만료되었습니다.\n"
+                    "사이드바에서 새 sessionid를 입력해주세요."
+                )
+            else:
+                result["error"] = (
+                    "📋 Instagram은 로그인이 필요합니다.\n"
+                    "사이드바에서 Instagram 로그인 → sessionid를 입력해주세요.\n"
+                    "또는 STEP 3 표에서 좋아요·댓글 수를 직접 입력하세요."
+                )
             return result
 
         data = resp.json()
@@ -773,11 +784,14 @@ def _scrape_instagram_single_post(url: str, playwright_page=None) -> dict:
         except Exception:
             pass  # fall through
 
-    # requests fallback — 그래프QL 엔드포인트 시도
+    # requests fallback — 그래프QL 엔드포인트 시도 (쿠키 사용)
     try:
         shortcode = [p for p in urlparse(url).path.split("/") if p][-1]
         sess = requests.Session()
         sess.headers.update(HEADERS_CHROME)
+        session_cookies = _get_session_cookies()
+        if session_cookies.get("instagram"):
+            sess.cookies.set("sessionid", session_cookies["instagram"], domain=".instagram.com")
         api_url = (
             f"https://www.instagram.com/api/graphql?variables="
             f'%7B"shortcode"%3A"{shortcode}"%7D'
@@ -809,8 +823,8 @@ def _scrape_instagram_single_post(url: str, playwright_page=None) -> dict:
         pass
 
     result["error"] = (
-        "📋 Instagram 개별 게시물은 로그인 없이 수집이 어렵습니다.\n"
-        "① 사이드바 '브라우저 열기'에서 Instagram 로그인 후 재시도\n"
+        "📋 Instagram 수집에 실패했습니다.\n"
+        "① 사이드바에서 Instagram 로그인 → sessionid 입력\n"
         "② 또는 STEP 3 표에서 좋아요·댓글 수를 직접 입력 후 점수 계산"
     )
     return result
@@ -819,6 +833,20 @@ def _scrape_instagram_single_post(url: str, playwright_page=None) -> dict:
 # ──────────────────────────────────────────────────────────────
 #  통합 스크래퍼 진입점
 # ──────────────────────────────────────────────────────────────
+
+def _get_session_cookies() -> dict:
+    """Streamlit session_state에서 쿠키 가져오기 (클라우드용)"""
+    cookies = {}
+    try:
+        import streamlit as st
+        if st.session_state.get("tiktok_session_cookie"):
+            cookies["tiktok"] = st.session_state["tiktok_session_cookie"]
+        if st.session_state.get("instagram_session_cookie"):
+            cookies["instagram"] = st.session_state["instagram_session_cookie"]
+    except Exception:
+        pass
+    return cookies
+
 
 def scrape_kol(
     url: str,
@@ -837,7 +865,6 @@ def scrape_kol(
     if platform == "TikTok":
         return scrape_tiktok(username, num_posts, pinned_ids, playwright_page)
     if platform == "Instagram":
-        # 개별 게시물 URL (/reel/... /p/...) vs 프로필 URL 구분
         if not username or _is_instagram_post_url(url):
             return _scrape_instagram_single_post(url, playwright_page)
         return scrape_instagram(username, num_posts, playwright_page)
@@ -936,7 +963,7 @@ def search_tiktok_brand(brand: str, max_results: int = 30,
         except Exception as e:
             pass  # fallback to requests
 
-    # ── 방법 2: requests (모바일 웹 HTML 파싱) ──
+    # ── 방법 2: requests (모바일 웹 HTML 파싱, 쿠키 사용) ──
     try:
         from urllib.parse import quote as _q
         MOBILE_UA = (
@@ -950,8 +977,11 @@ def search_tiktok_brand(brand: str, max_results: int = 30,
             "User-Agent": MOBILE_UA,
             "Referer": "https://www.tiktok.com/",
         })
+        # 세션 쿠키 적용
+        session_cookies = _get_session_cookies()
+        if session_cookies.get("tiktok"):
+            sess.cookies.set("sessionid", session_cookies["tiktok"], domain=".tiktok.com")
 
-        # 검색 페이지 HTML에서 UNIVERSAL_DATA 추출
         resp = sess.get(
             f"https://www.tiktok.com/search/video?q={_q(brand)}",
             timeout=20
