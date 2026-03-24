@@ -36,6 +36,33 @@ EMPTY_RESULT = {
 }
 
 
+def _ytdlp_extract(url: str, playlist: bool = False, max_items: int = 12) -> list[dict]:
+    """yt-dlp Python 라이브러리로 정보 추출. 실패 시 빈 리스트 반환."""
+    try:
+        import yt_dlp
+        opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "ignoreerrors": True,
+        }
+        if playlist:
+            opts["extract_flat"] = False
+            opts["playlistend"] = max_items
+
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            if info is None:
+                return []
+            # 플레이리스트인 경우 entries 반환
+            if "entries" in info:
+                return [e for e in info["entries"] if e is not None][:max_items]
+            # 단일 영상
+            return [info]
+    except Exception:
+        return []
+
+
 def detect_platform(url: str) -> str:
     """URL에서 플랫폼 자동 감지"""
     url = url.strip().lower()
@@ -241,54 +268,34 @@ def scrape_tiktok(username: str, num_posts: int = 12,
             result["error"] = ""  # 에러 초기화 후 아래 requests 방식 시도
             # (fall through)
 
-    # ── yt-dlp 방식 (로그인 불필요, 가장 안정적) ──
-    try:
-        import subprocess, sys
-        profile_url = f"https://www.tiktok.com/@{username}"
-        cmd = [
-            sys.executable, "-m", "yt_dlp",
-            "--flat-playlist", "--dump-json",
-            f"--playlist-items", f"1:{num_posts + 5}",
-            "--no-warnings",
-            profile_url
-        ]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
-        lines = [l for l in proc.stdout.strip().split("\n") if l.strip()]
-
-        if lines:
-            posts = []
-            for line in lines:
-                try:
-                    info = json.loads(line)
-                    vid_id = str(info.get("id", ""))
-                    if vid_id in pinned_ids:
-                        continue
-                    posts.append({
-                        "id":       vid_id,
-                        "views":    info.get("view_count"),
-                        "likes":    info.get("like_count"),
-                        "comments": info.get("comment_count"),
-                        "saves":    info.get("repost_count"),  # yt-dlp에서 가능한 경우
-                        "shares":   None,
-                    })
-                    if len(posts) >= num_posts:
-                        break
-                except Exception:
-                    continue
-
-            if posts:
-                result["success"] = True
-                result["posts"] = posts
-                result["post_count"] = len(posts)
-                result["avg_views"]    = _avg([p["views"]    for p in posts])
-                result["avg_likes"]    = _avg([p["likes"]    for p in posts])
-                result["avg_comments"] = _avg([p["comments"] for p in posts])
-                result["avg_saves"]    = _avg([p["saves"]    for p in posts])
-                result["avg_shares"]   = _avg([p["shares"]   for p in posts])
-                return result
-
-    except Exception:
-        pass
+    # ── yt-dlp 라이브러리 방식 (1순위, 로그인 불필요) ──
+    entries = _ytdlp_extract(f"https://www.tiktok.com/@{username}", playlist=True, max_items=num_posts + 5)
+    if entries:
+        posts = []
+        for info in entries:
+            vid_id = str(info.get("id", ""))
+            if vid_id in pinned_ids:
+                continue
+            posts.append({
+                "id":       vid_id,
+                "views":    info.get("view_count"),
+                "likes":    info.get("like_count"),
+                "comments": info.get("comment_count"),
+                "saves":    info.get("repost_count"),
+                "shares":   None,
+            })
+            if len(posts) >= num_posts:
+                break
+        if posts:
+            result["success"] = True
+            result["posts"] = posts
+            result["post_count"] = len(posts)
+            result["avg_views"]    = _avg([p["views"]    for p in posts])
+            result["avg_likes"]    = _avg([p["likes"]    for p in posts])
+            result["avg_comments"] = _avg([p["comments"] for p in posts])
+            result["avg_saves"]    = _avg([p["saves"]    for p in posts])
+            result["avg_shares"]   = _avg([p["shares"]   for p in posts])
+            return result
 
     # ── requests HTML 파싱 fallback ──
     try:
@@ -371,49 +378,31 @@ def scrape_instagram(username: str, num_posts: int = 12,
                      playwright_page=None) -> dict:
     result = {**EMPTY_RESULT, "platform": "Instagram", "username": username}
 
-    # ── yt-dlp 방식 (1순위) ──
-    try:
-        import subprocess, sys
-        profile_url = f"https://www.instagram.com/{username}/"
-        cmd = [
-            sys.executable, "-m", "yt_dlp",
-            "--flat-playlist", "--dump-json",
-            f"--playlist-items", f"1:{num_posts}",
-            "--no-warnings",
-            profile_url
-        ]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
-        lines = [l for l in proc.stdout.strip().split("\n") if l.strip()]
-        if lines:
-            posts = []
-            for line in lines[:num_posts]:
-                try:
-                    info = json.loads(line)
-                    likes = info.get("like_count")
-                    if likes is not None and likes < 0:
-                        likes = None
-                    posts.append({
-                        "id": info.get("id", ""),
-                        "views": info.get("view_count"),
-                        "likes": likes,
-                        "comments": info.get("comment_count"),
-                        "saves": None,
-                        "shares": None,
-                    })
-                except Exception:
-                    continue
-            if posts:
-                result["success"] = True
-                result["posts"] = posts
-                result["post_count"] = len(posts)
-                result["avg_views"]    = _avg([p["views"]    for p in posts])
-                result["avg_likes"]    = _avg([p["likes"]    for p in posts])
-                result["avg_comments"] = _avg([p["comments"] for p in posts])
-                result["avg_saves"]    = None
-                result["avg_shares"]   = None
-                return result
-    except Exception:
-        pass
+    # ── yt-dlp 라이브러리 방식 (1순위) ──
+    entries = _ytdlp_extract(f"https://www.instagram.com/{username}/", playlist=True, max_items=num_posts)
+    if entries:
+        posts = []
+        for info in entries:
+            likes = info.get("like_count")
+            if likes is not None and likes < 0:
+                likes = None
+            posts.append({
+                "id": info.get("id", ""),
+                "views": info.get("view_count"),
+                "likes": likes,
+                "comments": info.get("comment_count"),
+                "saves": None, "shares": None,
+            })
+        if posts:
+            result["success"] = True
+            result["posts"] = posts
+            result["post_count"] = len(posts)
+            result["avg_views"]    = _avg([p["views"]    for p in posts])
+            result["avg_likes"]    = _avg([p["likes"]    for p in posts])
+            result["avg_comments"] = _avg([p["comments"] for p in posts])
+            result["avg_saves"]    = None
+            result["avg_shares"]   = None
+            return result
 
     # ── Playwright 방식 ──
     if playwright_page:
@@ -551,75 +540,32 @@ def scrape_youtube(channel_url: str, num_posts: int = 12,
     username = extract_username(channel_url, "YouTube")
     result = {**EMPTY_RESULT, "platform": "YouTube", "username": username}
 
-    # yt-dlp 방식 (가장 안정적)
-    try:
-        import subprocess, sys
-        cmd = [
-            sys.executable, "-m", "yt_dlp",
-            "--flat-playlist",
-            "--dump-json",
-            f"--playlist-items", f"1:{num_posts}",
-            "--no-warnings",
-            f"{channel_url.rstrip('/')}/videos"
-        ]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        lines = [l for l in proc.stdout.strip().split("\n") if l.strip()]
-        if not lines:
-            raise ValueError("yt-dlp 출력 없음")
-
-        # 각 영상의 상세 정보 수집
+    # yt-dlp 라이브러리 방식
+    entries = _ytdlp_extract(f"{channel_url.rstrip('/')}/videos", playlist=True, max_items=num_posts)
+    if entries:
         posts = []
-        for line in lines[:num_posts]:
-            try:
-                info = json.loads(line)
-                vid_id = info.get("id", "")
-                # 개별 영상 상세 정보 가져오기
-                detail_cmd = [
-                    sys.executable, "-m", "yt_dlp",
-                    "--dump-json", "--no-warnings",
-                    "--skip-download",
-                    f"https://www.youtube.com/watch?v={vid_id}"
-                ]
-                detail_proc = subprocess.run(
-                    detail_cmd, capture_output=True, text=True, timeout=20
-                )
-                if detail_proc.returncode == 0 and detail_proc.stdout.strip():
-                    detail = json.loads(detail_proc.stdout.strip())
-                    posts.append({
-                        "id":       vid_id,
-                        "views":    detail.get("view_count"),
-                        "likes":    detail.get("like_count"),
-                        "comments": detail.get("comment_count"),
-                        "saves":    None,
-                        "shares":   None,
-                    })
-                else:
-                    posts.append({
-                        "id": vid_id,
-                        "views": info.get("view_count"),
-                        "likes": None, "comments": None,
-                        "saves": None, "shares": None,
-                    })
-            except Exception:
-                continue
-
-        if not posts:
-            result["error"] = "게시물 없음"
+        for info in entries:
+            posts.append({
+                "id":       info.get("id", ""),
+                "views":    info.get("view_count"),
+                "likes":    info.get("like_count"),
+                "comments": info.get("comment_count"),
+                "saves":    None,
+                "shares":   None,
+            })
+        if posts:
+            result["success"] = True
+            result["posts"] = posts
+            result["post_count"] = len(posts)
+            result["avg_views"]    = _avg([p["views"]    for p in posts])
+            result["avg_likes"]    = _avg([p["likes"]    for p in posts])
+            result["avg_comments"] = _avg([p["comments"] for p in posts])
+            result["avg_saves"]    = None
+            result["avg_shares"]   = None
             return result
 
-        result["success"] = True
-        result["posts"] = posts
-        result["post_count"] = len(posts)
-        result["avg_views"]    = _avg([p["views"]    for p in posts])
-        result["avg_likes"]    = _avg([p["likes"]    for p in posts])
-        result["avg_comments"] = _avg([p["comments"] for p in posts])
-        result["avg_saves"]    = None
-        result["avg_shares"]   = None
-        return result
-
-    except Exception as e:
-        result["error"] = f"yt-dlp 오류: {e} (pip install yt-dlp 로 설치하세요)"
-        return result
+    result["error"] = "YouTube 데이터 추출 실패 (yt-dlp)"
+    return result
 
 
 # ──────────────────────────────────────────────────────────────
@@ -822,38 +768,27 @@ def _scrape_instagram_single_post(url: str, playwright_page=None) -> dict:
     result = {**EMPTY_RESULT, "platform": "Instagram", "username": url}
     url = url.strip().split("?")[0].rstrip("/")  # 쿼리 파라미터 제거
 
-    # ── yt-dlp 방식 (1순위, 로그인 불필요) ──
-    try:
-        import subprocess, sys
-        cmd = [
-            sys.executable, "-m", "yt_dlp",
-            "--dump-json", "--no-warnings", "--skip-download",
-            url
-        ]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        if proc.returncode == 0 and proc.stdout.strip():
-            info = json.loads(proc.stdout.strip())
-            likes = info.get("like_count")
-            if likes is not None and likes < 0:
-                likes = None  # -1은 비공개
-            comments = info.get("comment_count")
-            views = info.get("view_count")
-            owner = info.get("channel") or info.get("uploader_id") or info.get("uploader", "")
-
-            if owner:
-                result["username"] = owner
-
-            posts = [{"id": url, "views": views, "likes": likes,
-                      "comments": comments, "saves": None, "shares": None}]
-            result["success"] = True
-            result["posts"] = posts
-            result["post_count"] = 1
-            result["avg_views"] = views
-            result["avg_likes"] = likes
-            result["avg_comments"] = comments
-            return result
-    except Exception:
-        pass
+    # ── yt-dlp 라이브러리 방식 (1순위, 로그인 불필요) ──
+    entries = _ytdlp_extract(url)
+    if entries:
+        info = entries[0]
+        likes = info.get("like_count")
+        if likes is not None and likes < 0:
+            likes = None
+        comments = info.get("comment_count")
+        views = info.get("view_count")
+        owner = info.get("channel") or info.get("uploader_id") or info.get("uploader", "")
+        if owner:
+            result["username"] = owner
+        posts = [{"id": url, "views": views, "likes": likes,
+                  "comments": comments, "saves": None, "shares": None}]
+        result["success"] = True
+        result["posts"] = posts
+        result["post_count"] = 1
+        result["avg_views"] = views
+        result["avg_likes"] = likes
+        result["avg_comments"] = comments
+        return result
 
     # ── Playwright 방식 ──
     if playwright_page:
@@ -959,10 +894,40 @@ def scrape_kol(
     반환: {success, error, platform, username,
           avg_views, avg_likes, avg_comments, avg_saves, avg_shares, post_count, posts}
     """
+    # URL 전처리: 쿼리 파라미터 정리
+    url = url.strip()
+
+    # TikTok/Instagram 단축 URL 리다이렉트 풀기
+    if "/t/" in url and "tiktok.com" in url:
+        try:
+            r = requests.get(url, allow_redirects=True, timeout=10,
+                             headers={"User-Agent": HEADERS_CHROME["User-Agent"]})
+            if "@" in r.url and "/video/" in r.url:
+                url = r.url.split("?")[0]
+        except Exception:
+            pass
+
     platform = detect_platform(url)
     username = extract_username(url, platform)
 
     if platform == "TikTok":
+        # 개별 비디오 URL(/video/XXXXX)이면 단일 추출 먼저 시도
+        if "/video/" in url:
+            entries = _ytdlp_extract(url.split("?")[0])
+            if entries:
+                info = entries[0]
+                r = {**EMPTY_RESULT, "platform": "TikTok", "username": username, "success": True}
+                r["posts"] = [{"id": info.get("id",""), "views": info.get("view_count"),
+                               "likes": info.get("like_count"), "comments": info.get("comment_count"),
+                               "saves": info.get("repost_count"), "shares": None}]
+                r["post_count"] = 1
+                r["avg_views"] = info.get("view_count")
+                r["avg_likes"] = info.get("like_count")
+                r["avg_comments"] = info.get("comment_count")
+                return r
+            # 실패 시 프로필 스크래핑으로 fallback (username 있으면)
+            if username:
+                return scrape_tiktok(username, num_posts, pinned_ids, playwright_page)
         return scrape_tiktok(username, num_posts, pinned_ids, playwright_page)
     if platform == "Instagram":
         if not username or _is_instagram_post_url(url):
