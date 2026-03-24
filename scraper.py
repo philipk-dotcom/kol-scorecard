@@ -371,6 +371,51 @@ def scrape_instagram(username: str, num_posts: int = 12,
                      playwright_page=None) -> dict:
     result = {**EMPTY_RESULT, "platform": "Instagram", "username": username}
 
+    # ── yt-dlp 방식 (1순위) ──
+    try:
+        import subprocess, sys
+        profile_url = f"https://www.instagram.com/{username}/"
+        cmd = [
+            sys.executable, "-m", "yt_dlp",
+            "--flat-playlist", "--dump-json",
+            f"--playlist-items", f"1:{num_posts}",
+            "--no-warnings",
+            profile_url
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+        lines = [l for l in proc.stdout.strip().split("\n") if l.strip()]
+        if lines:
+            posts = []
+            for line in lines[:num_posts]:
+                try:
+                    info = json.loads(line)
+                    likes = info.get("like_count")
+                    if likes is not None and likes < 0:
+                        likes = None
+                    posts.append({
+                        "id": info.get("id", ""),
+                        "views": info.get("view_count"),
+                        "likes": likes,
+                        "comments": info.get("comment_count"),
+                        "saves": None,
+                        "shares": None,
+                    })
+                except Exception:
+                    continue
+            if posts:
+                result["success"] = True
+                result["posts"] = posts
+                result["post_count"] = len(posts)
+                result["avg_views"]    = _avg([p["views"]    for p in posts])
+                result["avg_likes"]    = _avg([p["likes"]    for p in posts])
+                result["avg_comments"] = _avg([p["comments"] for p in posts])
+                result["avg_saves"]    = None
+                result["avg_shares"]   = None
+                return result
+    except Exception:
+        pass
+
+    # ── Playwright 방식 ──
     if playwright_page:
         try:
             page = playwright_page
@@ -775,9 +820,42 @@ def _scrape_instagram_single_post(url: str, playwright_page=None) -> dict:
     좋아요·댓글 1개 게시물만 반환.
     """
     result = {**EMPTY_RESULT, "platform": "Instagram", "username": url}
-    url = url.strip().rstrip("/")
+    url = url.strip().split("?")[0].rstrip("/")  # 쿼리 파라미터 제거
 
-    # Playwright 방식
+    # ── yt-dlp 방식 (1순위, 로그인 불필요) ──
+    try:
+        import subprocess, sys
+        cmd = [
+            sys.executable, "-m", "yt_dlp",
+            "--dump-json", "--no-warnings", "--skip-download",
+            url
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if proc.returncode == 0 and proc.stdout.strip():
+            info = json.loads(proc.stdout.strip())
+            likes = info.get("like_count")
+            if likes is not None and likes < 0:
+                likes = None  # -1은 비공개
+            comments = info.get("comment_count")
+            views = info.get("view_count")
+            owner = info.get("channel") or info.get("uploader_id") or info.get("uploader", "")
+
+            if owner:
+                result["username"] = owner
+
+            posts = [{"id": url, "views": views, "likes": likes,
+                      "comments": comments, "saves": None, "shares": None}]
+            result["success"] = True
+            result["posts"] = posts
+            result["post_count"] = 1
+            result["avg_views"] = views
+            result["avg_likes"] = likes
+            result["avg_comments"] = comments
+            return result
+    except Exception:
+        pass
+
+    # ── Playwright 방식 ──
     if playwright_page:
         try:
             page = playwright_page
